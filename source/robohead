@@ -150,10 +150,12 @@ def core_restart(args):
 
 def core_start(args):
     check_ros()
+    print("Запуск robohead_controller...")
     run_cmd("sudo systemctl start robohead.service")
 
 def core_stop(args):
     check_ros()
+    print("Остановка robohead_controller...")
     run_cmd("sudo systemctl stop robohead.service")
 
 def core_shutdown(args):
@@ -285,6 +287,7 @@ def action_info(args):
     else:
         print(f"Действие: {name}")
         print(f"Путь: {action_file.absolute()}")
+        print(f"Обновлено: {datetime.fromtimestamp(os.path.getmtime(action_file)).isoformat()}")
         print(f"Размер: {os.path.getsize(action_file)} байт")
 
 def action_run(args):
@@ -317,95 +320,121 @@ def check_int(value):
             raise ValueError()
         return v
     except:
-        raise argparse.ArgumentTypeError("0-100")
+        raise argparse.ArgumentTypeError("Должно быть от 0 до 100")
 
 def main():
-    parser = argparse.ArgumentParser(prog='robohead', description='RoboHead CLI - ROS 2')
-    subparsers = parser.add_subparsers(dest='module')
+    parser = argparse.ArgumentParser(
+        prog='robohead',
+        description='RoboHead CLI - утилита управления роботом на базе ROS 2',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Примеры:
+  robohead core restart --debug
+  robohead core get_img --pack
+  robohead core get_img --device /dev/sdc --output /media/usb/backup.img --2pack
+  robohead config speakers set_volume 75
+  robohead config speakers set_volume 75 --standart
+  robohead config words add_command улыбнись
+  robohead config words add_wake_phrase слушай робот
+  robohead action create smile улыбнись
+  robohead action run std_smile
+  robohead action list
+
+Документация: https://docs.voltbro.ru
+        '''
+    )
+    subparsers = parser.add_subparsers(dest='module', metavar='МОДУЛЬ', help='Доступные модули')
 
     # CORE
-    p_core = subparsers.add_parser('core')
-    core_sub = p_core.add_subparsers(dest='command')
+    p_core = subparsers.add_parser('core', help='Управление системой и сервисами')
+    core_sub = p_core.add_subparsers(dest='command', metavar='КОМАНДА', help='Команды core')
     
-    core_sub.add_parser('start').set_defaults(func=core_start)
-    core_sub.add_parser('stop').set_defaults(func=core_stop)
+    p_start = core_sub.add_parser('start', help='Запустить сервис robohead_controller')
+    p_start.set_defaults(func=core_start)
     
-    p_restart = core_sub.add_parser('restart')
-    p_restart.add_argument('--debug', action='store_true')
+    p_stop = core_sub.add_parser('stop', help='Остановить сервис robohead_controller')
+    p_stop.set_defaults(func=core_stop)
+    
+    p_restart = core_sub.add_parser('restart', help='Перезапустить сервис robohead_controller')
+    p_restart.add_argument('--debug', action='store_true', help='Запуск в режиме отладки через ros2 run')
     p_restart.set_defaults(func=core_restart)
     
-    p_img = core_sub.add_parser('get_img')
-    p_img.add_argument('--device')
-    p_img.add_argument('--output')
-    p_img.add_argument('--pack', action='store_true')
-    p_img.add_argument('--2pack', action='store_true')
-    p_img.set_defaults(func=core_get_img)
+    p_get_img = core_sub.add_parser('get_img', help='Создать образ SD-карты')
+    p_get_img.add_argument('--device', help='Устройство SD-карты (например, /dev/sdc)')
+    p_get_img.add_argument('--output', help='Полный путь к выходному файлу')
+    p_get_img.add_argument('--pack', action='store_true', help='Сжать образ через PiShrink')
+    p_get_img.add_argument('--2pack', action='store_true', help='Сжать + архивировать в gzip')
+    p_get_img.set_defaults(func=core_get_img)
     
-    p_shutdown = core_sub.add_parser('shutdown')
-    p_shutdown.add_argument('--no-sync', action='store_true')
+    p_shutdown = core_sub.add_parser('shutdown', help='Выключить систему')
+    p_shutdown.add_argument('--no-sync', action='store_true', help='Выключение без синхронизации дисков')
     p_shutdown.set_defaults(func=core_shutdown)
     
-    p_reboot = core_sub.add_parser('reboot')
-    p_reboot.add_argument('--no-sync', action='store_true')
+    p_reboot = core_sub.add_parser('reboot', help='Перезагрузить систему')
+    p_reboot.add_argument('--no-sync', action='store_true', help='Перезагрузка без синхронизации дисков')
     p_reboot.set_defaults(func=core_reboot)
 
     # CONFIG
-    p_config = subparsers.add_parser('config')
-    config_sub = p_config.add_subparsers(dest='command')
+    p_config = subparsers.add_parser('config', help='Настройки системы')
+    config_sub = p_config.add_subparsers(dest='command', metavar='КОМАНДА', help='Команды config')
     
-    p_spk = config_sub.add_parser('speakers')
-    sp_sub = p_spk.add_subparsers(dest='sp_command')
+    # Speakers
+    p_speakers = config_sub.add_parser('speakers', help='Настройки аудио и динамиков')
+    sp_sub = p_speakers.add_subparsers(dest='sp_command', metavar='КОМАНДА', help='Команды для динамиков')
     
-    p_vol = sp_sub.add_parser('set_volume')
-    p_vol.add_argument('VOLUME', nargs='?', type=check_int)
-    p_vol.add_argument('--default', action='store_true')
-    p_vol.add_argument('--standart', action='store_true')
+    p_vol = sp_sub.add_parser('set_volume', help='Установить уровень громкости')
+    p_vol.add_argument('VOLUME', nargs='?', type=check_int, help='Уровень громкости (0-100)')
+    p_vol.add_argument('--default', action='store_true', help='Установить стандартную громкость (60%%)')
+    p_vol.add_argument('--standart', action='store_true', help='Сохранить для автозапуска')
     p_vol.set_defaults(func=set_volume)
+
+    # Voice
+    p_voice = config_sub.add_parser('voice', help='Настройки голосового распознавания')
+    voice_sub = p_voice.add_subparsers(dest='voice_command', metavar='КОМАНДА', help='Голосовые команды')
     
-    p_voice = config_sub.add_parser('voice')
-    voice_sub = p_voice.add_subparsers(dest='voice_command')
-    
-    p_audio = voice_sub.add_parser('set_audio')
-    p_audio.add_argument('--from-file', required=True)
-    p_audio.add_argument('--to-module', required=True)
+    p_audio = voice_sub.add_parser('set_audio', help='Заменить аудиофайл в модуле')
+    p_audio.add_argument('--from-file', required=True, help='Путь к исходному аудиофайлу (mp3/wav)')
+    p_audio.add_argument('--to-module', required=True, help='Целевой модуль')
     p_audio.set_defaults(func=set_audio)
+
+    # Words
+    p_words = config_sub.add_parser('words', help='Словарь голосового распознавания')
+    words_sub = p_words.add_subparsers(dest='words_command', metavar='КОМАНДА', help='Команды для словаря')
     
-    p_words = config_sub.add_parser('words')
-    words_sub = p_words.add_subparsers(dest='words_command')
-    
-    p_cmd = words_sub.add_parser('add_command')
-    p_cmd.add_argument('WORD')
+    p_cmd = words_sub.add_parser('add_command', help='Добавить команду (ASR)')
+    p_cmd.add_argument('WORD', help='Команда для добавления')
     p_cmd.set_defaults(func=add_word)
     
-    p_wake = words_sub.add_parser('add_wake_phrase')
-    p_wake.add_argument('WORD')
+    p_wake = words_sub.add_parser('add_wake_phrase', help='Добавить активационное слово (KWS)')
+    p_wake.add_argument('WORD', help='Слово для добавления')
     p_wake.set_defaults(func=add_wake_phrase)
 
     # ACTION
-    p_action = subparsers.add_parser('action')
-    action_sub = p_action.add_subparsers(dest='command')
+    p_action = subparsers.add_parser('action', help='Управление действиями')
+    action_sub = p_action.add_subparsers(dest='command', metavar='КОМАНДА', help='Команды для действий')
     
-    action_sub.add_parser('list').set_defaults(func=list_actions)
+    p_list = action_sub.add_parser('list', help='Список доступных действий')
+    p_list.set_defaults(func=list_actions)
     
-    p_create = action_sub.add_parser('create')
-    p_create.add_argument('NAME')
-    p_create.add_argument('WORD', nargs='?')
-    p_create.add_argument('--no-word', action='store_true')
+    p_create = action_sub.add_parser('create', help='Создать новое действие')
+    p_create.add_argument('NAME', help='Имя действия (папка)')
+    p_create.add_argument('WORD', nargs='?', help='Команда активации (опционально)')
+    p_create.add_argument('--no-word', action='store_true', help='Без команды активации')
     p_create.set_defaults(func=create_action)
     
-    p_remove = action_sub.add_parser('remove')
-    p_remove.add_argument('PACKAGE')
+    p_remove = action_sub.add_parser('remove', help='Удалить действие')
+    p_remove.add_argument('PACKAGE', help='Имя действия/пакета')
     p_remove.set_defaults(func=remove_action)
     
-    p_info = action_sub.add_parser('info')
-    p_info.add_argument('PACKAGE')
-    p_info.add_argument('--path', action='store_true')
-    p_info.add_argument('--data', action='store_true')
-    p_info.add_argument('--in-file', action='store_true')
+    p_info = action_sub.add_parser('info', help='Информация о действии')
+    p_info.add_argument('PACKAGE', help='Имя действия')
+    p_info.add_argument('--path', action='store_true', help='Показать только путь')
+    p_info.add_argument('--data', action='store_true', help='Показать только дату')
+    p_info.add_argument('--in-file', action='store_true', help='Показать содержимое файла')
     p_info.set_defaults(func=action_info)
     
-    p_run = action_sub.add_parser('run')
-    p_run.add_argument('ACTION')
+    p_run = action_sub.add_parser('run', help='Запустить действие через ROS topic')
+    p_run.add_argument('ACTION', help='Имя действия')
     p_run.set_defaults(func=action_run)
 
     args = parser.parse_args()
@@ -414,7 +443,7 @@ def main():
         try:
             args.func(args)
         except KeyboardInterrupt:
-            print("\nПрервано")
+            print("\nПрервано пользователем")
             sys.exit(130)
         except Exception as e:
             print(f"Ошибка: {e}")

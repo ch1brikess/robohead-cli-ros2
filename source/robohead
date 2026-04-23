@@ -308,7 +308,7 @@ def core_restart(args):
     if args.debug:
         print("Режим отладки...")
         if input("Выполнить? (y/n): ").lower() == 'y':
-            run_cmd(f"cd {WS_ROOT} && source install/setup.bash && ros2 run robohead_controller robohead_controller_node")
+            run_cmd(f"ros2 launch robohead_controller robohead_controller.launch.py")
     else:
         print("Перезапуск...")
         run_cmd("sudo systemctl restart robohead.service")

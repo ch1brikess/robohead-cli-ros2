@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import sys
+import os
+import json
+import shutil
+import yaml
+from pathlib import Path
+from datetime import datetime
+
+# Пути установки
+INSTALL_DIR = Path("/opt/robohead-cli")
+USER_CONFIG_DIR = Path.home() / ".config" / "robohead"
+USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
+
+# Загружаем конфиг
+def load_user_config():
+    if not USER_CONFIG_FILE.exists():
+        print(f"Конфиг не найден: {USER_CONFIG_FILE}")
+        print("Запустите: sudo ./install.sh")
+        sys.exit(1)
+    
+    with open(USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+CONFIG = load_user_config()
+
+# Пути из конфига
+WS_ROOT = Path(CONFIG['paths']['ws_root']).expanduser()
+CONTROLLER_ROOT = Path(CONFIG['paths']['controller_root']).expanduser()
+CONFIG_DIR = Path(CONFIG['paths']['config_dir']).expanduser()
+ACTIONS_DIR = Path(CONFIG['paths']['actions_dir']).expanduser()
+IMAGE_DIR = Path(CONFIG['paths']['image_dir']).expanduser()
+PISHRINK_PATH = CONFIG['tools']['pishrink_path']
+
+# Файлы конфигов
+YAML_CONFIG = CONFIG_DIR / CONFIG['files']['robohead_controller_yaml']
+MEDIA_CONFIG = CONFIG_DIR / CONFIG['files']['media_driver_yaml']
+ASR_CONFIG = CONFIG_DIR / CONFIG['files']['asr_yaml']
+KWS_CONFIG = CONFIG_DIR / CONFIG['files']['kws_yaml']
+
+# ROS топик из конфига
+ASR_TOPIC = CONFIG['ros']['topics']['asr_commands']
+VOLUME_SERVICE = CONFIG['ros']['topics']['media_volume']
+
+def check_ros():
+    if not WS_ROOT.exists():
+        print(f"ROS workspace не найден: {WS_ROOT}")
+        sys.exit(1)
+
+def run_cmd(cmd):
+    try:
+        subprocess.run(cmd, shell=True, check=True, cwd=str(Path.home()), executable='/bin/bash')
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        sys.exit(1)
+
+def run_cmd_capture(cmd):
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=str(Path.home()), executable='/bin/bash')
+        return result.stdout
+    except:
+        return None
+
+def backup(filepath):
+    if filepath.exists():
+        backup_path = str(filepath) + ".bak"
+        shutil.copy2(filepath, backup_path)
+        print(f"Бэкап: {backup_path}")
+
+def load_yaml(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        print(f"Ошибка чтения {filepath}: {e}")
+        return None
+
+def save_yaml(filepath, data):
+    backup(filepath)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    print(f"Сохранено: {filepath}")
+
+def check_pishrink():
+    if not os.path.exists(PISHRINK_PATH):
+        print("PiShrink не найден. Установка...")
+        run_cmd(f"wget https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh -O {PISHRINK_PATH}")
+        run_cmd(f"chmod +x {PISHRINK_PATH}")
+
+# ==================== CORE ====================
+
+def core_get_img(args):
+    device = args.device if args.device else None
+    
+    if not device:
+        print("Автоматическое определение SD-карты...")
+        output = run_cmd_capture("lsblk -d -o NAME,SIZE,TYPE | grep disk")
+        print("Доступные диски:")
+        print(output)
+        device = input("Введите имя диска: ").strip()
+        if not device:
+            device = "mmcblk0"
+        if not device.startswith("/dev/"):
+            device = f"/dev/{device}"
+    
+    if not os.path.exists(device):
+        print(f"Устройство не найдено: {device}")
+        return
+    
+    if args.output:
+        output_path = Path(args.output)
+        if output_path.suffix != '.img' and not args.pack2:
+            output_path = output_path.with_suffix(output_path.suffix + '.img')
+        elif args.pack2:
+            output_path = Path(str(output_path) + '.gz')
+    else:
+        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = IMAGE_DIR / f"robohead_image_{timestamp}.img"
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Выходной файл: {output_path}")
+    
+    print("\n[1/3] Создание образа...")
+    run_cmd(f"sudo dd bs=4M status=progress if={device} of='{output_path}'")
+    
+    if args.pack or args.pack2:
+        print("\n[2/3] Сжатие...")
+        check_pishrink()
+        run_cmd(f"sudo {PISHRINK_PATH} '{output_path}'")
+    
+    if args.pack2:
+        print("\n[3/3] Архивация...")
+        run_cmd(f"gzip '{output_path}'")
+    
+    print("\nГотово!")
+
+def core_restart(args):
+    check_ros()
+    if args.debug:
+        print("Режим отладки...")
+        if input("Выполнить? (y/n): ").lower() == 'y':
+            run_cmd(f"cd {WS_ROOT} && source install/setup.bash && ros2 run robohead_controller robohead_controller_node")
+    else:
+        print("Перезапуск...")
+        run_cmd("sudo systemctl restart robohead.service")
+
+def core_start(args):
+    check_ros()
+    run_cmd("sudo systemctl start robohead.service")
+
+def core_stop(args):
+    check_ros()
+    run_cmd("sudo systemctl stop robohead.service")
+
+def core_shutdown(args):
+    cmd = f"sudo shutdown {'-h' if not args.no_sync else ''} now"
+    print(f"ВЫКЛЮЧЕНИЕ: {cmd}")
+    if input("Подтвердить? (y/n): ").lower() == 'y':
+        run_cmd(cmd)
+
+def core_reboot(args):
+    print(f"ПЕРЕЗАГРУЗКА: sudo reboot")
+    if input("Подтвердить? (y/n): ").lower() == 'y':
+        run_cmd("sudo reboot")
+
+# ==================== CONFIG ====================
+
+def set_volume(args):
+    volume = 60.0 if args.default else float(args.VOLUME) if args.VOLUME else None
+    
+    if volume is None:
+        print("Укажите громкость или --default")
+        return
+    
+    print(f"Громкость: {volume}%")
+    run_cmd(f"ros2 service call {VOLUME_SERVICE} robohead_interfaces/srv/SetVolume '{{volume: {volume}}}'")
+    
+    if args.standart:
+        config = load_yaml(MEDIA_CONFIG)
+        if config:
+            config['/**']['ros__parameters']['default_volume'] = volume
+            save_yaml(MEDIA_CONFIG, config)
+
+def set_audio(args):
+    if not args.from_file or not args.to_module:
+        print("Требуются: --from-file и --to-module")
+        return
+    
+    action_name = args.to_module.split('/')[0]
+    action_dir = ACTIONS_DIR / action_name
+    
+    if action_dir.exists():
+        dest = action_dir / Path(args.from_file).name
+        shutil.copy2(args.from_file, dest)
+        print(f"Скопировано: {dest}")
+
+def add_word(args):
+    word = args.WORD.strip().lower()
+    config = load_yaml(ASR_CONFIG)
+    if config:
+        commands = config.get('/**', {}).get('ros__parameters', {}).get('commands', [])
+        if word not in commands:
+            commands.append(word)
+            config['/**']['ros__parameters']['commands'] = commands
+            save_yaml(ASR_CONFIG, config)
+
+def add_wake_phrase(args):
+    word = args.WORD.strip().lower()
+    config = load_yaml(KWS_CONFIG)
+    if config:
+        phrases = config.get('/**', {}).get('ros__parameters', {}).get('wake_phrases', [])
+        if word not in phrases:
+            phrases.append(word)
+            config['/**']['ros__parameters']['wake_phrases'] = phrases
+            save_yaml(KWS_CONFIG, config)
+
+# ==================== ACTION ====================
+
+def list_actions(args):
+    if not ACTIONS_DIR.exists():
+        print("Директория не найдена")
+        return
+    
+    actions = [d.name for d in ACTIONS_DIR.iterdir() if d.is_dir() and (d / 'action.py').exists()]
+    print(f"Действия ({len(actions)}):")
+    for name in sorted(actions):
+        print(f"  - {name}")
+
+def create_action(args):
+    name = args.NAME.strip().lower()
+    word = args.WORD.strip().lower() if args.WORD and not args.no_word else None
+    
+    action_dir = ACTIONS_DIR / name
+    if action_dir.exists():
+        print(f"Уже существует: {action_dir}")
+        return
+    
+    action_dir.mkdir(parents=True)
+    (action_dir / '__init__.py').write_text("")
+    
+    code = f"#!/usr/bin/env python3\n\nclass Action:\n    def run(self, **kwargs):\n        print(\"Действие {name} выполнено\")\n        return True\n"
+    (action_dir / 'action.py').write_text(code)
+    print(f"Создано: {action_dir / 'action.py'}")
+    
+    if word:
+        add_word(type('Args', (), {'WORD': word})())
+        
+        config = load_yaml(YAML_CONFIG)
+        if config:
+            match = config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
+            match[word] = f"{name}/action.py"
+            config['/**']['ros__parameters']['actions_match'] = match
+            save_yaml(YAML_CONFIG, config)
+
+def remove_action(args):
+    name = args.PACKAGE.strip().lower()
+    action_dir = ACTIONS_DIR / name
+    
+    if not action_dir.exists():
+        print("Не найдено")
+        return
+    
+    if input(f"Удалить {name}? (y/n): ").lower() == 'y':
+        shutil.rmtree(action_dir)
+        print("Удалено")
+
+def action_info(args):
+    name = args.PACKAGE.strip().lower()
+    action_file = ACTIONS_DIR / name / 'action.py'
+    
+    if not action_file.exists():
+        print("Не найдено")
+        return
+    
+    if args.path:
+        print(str(action_file.absolute()))
+    elif args.data:
+        print(datetime.fromtimestamp(os.path.getmtime(action_file)).isoformat())
+    elif args.in_file:
+        print(action_file.read_text())
+    else:
+        print(f"Действие: {name}")
+        print(f"Путь: {action_file.absolute()}")
+        print(f"Размер: {os.path.getsize(action_file)} байт")
+
+def action_run(args):
+    action_name = args.ACTION.strip()
+    config = load_yaml(YAML_CONFIG)
+    
+    if not config:
+        return
+    
+    match = config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
+    
+    found_word = None
+    for word, path in match.items():
+        if action_name in path:
+            found_word = word
+            break
+    
+    if found_word:
+        print(f"Отправка: {found_word}")
+        run_cmd(f'ros2 topic pub {ASR_TOPIC} std_msgs/msg/String " \'{found_word}\'"')
+    else:
+        print(f"Действие не найдено: {action_name}")
+
+# ==================== MAIN ====================
+
+def check_int(value):
+    try:
+        v = float(value)
+        if v < 0 or v > 100:
+            raise ValueError()
+        return v
+    except:
+        raise argparse.ArgumentTypeError("0-100")
+
+def main():
+    parser = argparse.ArgumentParser(prog='robohead', description='RoboHead CLI - ROS 2')
+    subparsers = parser.add_subparsers(dest='module')
+
+    # CORE
+    p_core = subparsers.add_parser('core')
+    core_sub = p_core.add_subparsers(dest='command')
+    
+    core_sub.add_parser('start').set_defaults(func=core_start)
+    core_sub.add_parser('stop').set_defaults(func=core_stop)
+    
+    p_restart = core_sub.add_parser('restart')
+    p_restart.add_argument('--debug', action='store_true')
+    p_restart.set_defaults(func=core_restart)
+    
+    p_img = core_sub.add_parser('get_img')
+    p_img.add_argument('--device')
+    p_img.add_argument('--output')
+    p_img.add_argument('--pack', action='store_true')
+    p_img.add_argument('--2pack', action='store_true')
+    p_img.set_defaults(func=core_get_img)
+    
+    p_shutdown = core_sub.add_parser('shutdown')
+    p_shutdown.add_argument('--no-sync', action='store_true')
+    p_shutdown.set_defaults(func=core_shutdown)
+    
+    p_reboot = core_sub.add_parser('reboot')
+    p_reboot.add_argument('--no-sync', action='store_true')
+    p_reboot.set_defaults(func=core_reboot)
+
+    # CONFIG
+    p_config = subparsers.add_parser('config')
+    config_sub = p_config.add_subparsers(dest='command')
+    
+    p_spk = config_sub.add_parser('speakers')
+    sp_sub = p_spk.add_subparsers(dest='sp_command')
+    
+    p_vol = sp_sub.add_parser('set_volume')
+    p_vol.add_argument('VOLUME', nargs='?', type=check_int)
+    p_vol.add_argument('--default', action='store_true')
+    p_vol.add_argument('--standart', action='store_true')
+    p_vol.set_defaults(func=set_volume)
+    
+    p_voice = config_sub.add_parser('voice')
+    voice_sub = p_voice.add_subparsers(dest='voice_command')
+    
+    p_audio = voice_sub.add_parser('set_audio')
+    p_audio.add_argument('--from-file', required=True)
+    p_audio.add_argument('--to-module', required=True)
+    p_audio.set_defaults(func=set_audio)
+    
+    p_words = config_sub.add_parser('words')
+    words_sub = p_words.add_subparsers(dest='words_command')
+    
+    p_cmd = words_sub.add_parser('add_command')
+    p_cmd.add_argument('WORD')
+    p_cmd.set_defaults(func=add_word)
+    
+    p_wake = words_sub.add_parser('add_wake_phrase')
+    p_wake.add_argument('WORD')
+    p_wake.set_defaults(func=add_wake_phrase)
+
+    # ACTION
+    p_action = subparsers.add_parser('action')
+    action_sub = p_action.add_subparsers(dest='command')
+    
+    action_sub.add_parser('list').set_defaults(func=list_actions)
+    
+    p_create = action_sub.add_parser('create')
+    p_create.add_argument('NAME')
+    p_create.add_argument('WORD', nargs='?')
+    p_create.add_argument('--no-word', action='store_true')
+    p_create.set_defaults(func=create_action)
+    
+    p_remove = action_sub.add_parser('remove')
+    p_remove.add_argument('PACKAGE')
+    p_remove.set_defaults(func=remove_action)
+    
+    p_info = action_sub.add_parser('info')
+    p_info.add_argument('PACKAGE')
+    p_info.add_argument('--path', action='store_true')
+    p_info.add_argument('--data', action='store_true')
+    p_info.add_argument('--in-file', action='store_true')
+    p_info.set_defaults(func=action_info)
+    
+    p_run = action_sub.add_parser('run')
+    p_run.add_argument('ACTION')
+    p_run.set_defaults(func=action_run)
+
+    args = parser.parse_args()
+    
+    if hasattr(args, 'func'):
+        try:
+            args.func(args)
+        except KeyboardInterrupt:
+            print("\nПрервано")
+            sys.exit(130)
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            sys.exit(1)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()

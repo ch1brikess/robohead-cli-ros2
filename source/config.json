@@ -1,0 +1,27 @@
+{
+    "paths": {
+      "ws_root": "~/robohead_ws",
+      "controller_root": "~/robohead_ws/src/robohead2/robohead_controller",
+      "config_dir": "~/robohead_ws/src/robohead2/robohead_controller/config",
+      "actions_dir": "~/robohead_ws/src/robohead2/robohead_controller/robohead_controller/actions",
+      "image_dir": "~/OS_image",
+      "user_config_dir": "~/.config/robohead"
+    },
+    "files": {
+      "robohead_controller_yaml": "robohead_controller.yaml",
+      "media_driver_yaml": "media_driver.yaml",
+      "asr_yaml": "speech_recognizer_asr.yaml",
+      "kws_yaml": "speech_recognizer_kws.yaml"
+    },
+    "tools": {
+      "pishrink_path": "/usr/local/bin/pishrink.sh"
+    },
+    "ros": {
+      "version": 2,
+      "topics": {
+        "asr_commands": "/robohead/speech_recognizer/asr/commands",
+        "kws_wake": "/robohead/speech_recognizer/kws/wake_phrases",
+        "media_volume": "/robohead/media_driver/set_volume"
+      }
+    }
+  }

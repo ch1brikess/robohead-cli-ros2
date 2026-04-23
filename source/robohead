@@ -70,19 +70,184 @@ def backup(filepath):
         shutil.copy2(filepath, backup_path)
         print(f"Бэкап: {backup_path}")
 
-def load_yaml(filepath):
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    except Exception as e:
-        print(f"Ошибка чтения {filepath}: {e}")
-        return None
-
-def save_yaml(filepath, data):
+def add_to_yaml_list(filepath, key, value):
+    """Добавить элемент в список YAML, сохраняя форматирование"""
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
     backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    # Находим секцию с ключом
+    in_section = False
+    insert_index = None
+    base_indent = 0
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Нашли ключ списка (wake_phrases: или fast_commands: или commands:)
+        if f'{key}:' in stripped and not in_section:
+            in_section = True
+            base_indent = len(line) - len(line.lstrip())
+            insert_index = i + 1
+            continue
+        
+        # Если в секции, ищем конец списка
+        if in_section:
+            current_indent = len(line) - len(line.lstrip())
+            
+            # Пустая строка или новый ключ с меньшим отступом - конец списка
+            if stripped and not stripped.startswith('-') and current_indent <= base_indent:
+                break
+            
+            # Нашли последний элемент списка
+            if stripped.startswith('-'):
+                insert_index = i + 1
+    
+    if insert_index is None:
+        print(f"Секция '{key}' не найдена")
+        return False
+    
+    # Добавляем новый элемент с правильным отступом и кавычками
+    new_line = ' ' * (base_indent + 2) + f'- "{value}"\n'
+    lines.insert(insert_index, new_line)
+    
     with open(filepath, 'w', encoding='utf-8') as f:
-        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    print(f"Сохранено: {filepath}")
+        f.writelines(lines)
+    
+    print(f"Добавлено: {value}")
+    return True
+
+def remove_from_yaml_list(filepath, key, value):
+    """Удалить элемент из списка YAML, сохраняя форматирование"""
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
+    backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    in_section = False
+    removed = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Нашли ключ списка
+        if f'{key}:' in stripped and not in_section:
+            in_section = True
+            continue
+        
+        # Если в секции, ищем элемент для удаления
+        if in_section:
+            current_indent = len(line) - len(line.lstrip())
+            
+            # Конец списка
+            if stripped and not stripped.startswith('-') and current_indent == 0:
+                break
+            
+            # Проверяем элемент списка
+            if stripped.startswith('-'):
+                # Удаляем кавычки и пробелы для сравнения
+                item = stripped[1:].strip().strip('"').strip("'")
+                if item.lower() == value.lower():
+                    lines.pop(i)
+                    removed = True
+                    print(f"Удалено: {value}")
+                    break
+    
+    if not removed:
+        print(f"Не найдено: {value}")
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    return removed
+
+def get_yaml_list(filepath, key):
+    """Получить список из YAML файла"""
+    if not filepath.exists():
+        return []
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    items = []
+    in_section = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if f'{key}:' in stripped and not in_section:
+            in_section = True
+            continue
+        
+        if in_section:
+            current_indent = len(line) - len(line.lstrip())
+            
+            if stripped and not stripped.startswith('-') and current_indent == 0:
+                break
+            
+            if stripped.startswith('-'):
+                item = stripped[1:].strip().strip('"').strip("'")
+                items.append(item)
+    
+    return items
+
+def set_yaml_list(filepath, key, value):
+    """Установить единственный элемент в списке YAML"""
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
+    backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    in_section = False
+    start_index = None
+    end_index = None
+    base_indent = 0
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        if f'{key}:' in stripped and not in_section:
+            in_section = True
+            base_indent = len(line) - len(line.lstrip())
+            start_index = i + 1
+            continue
+        
+        if in_section:
+            current_indent = len(line) - len(line.lstrip())
+            
+            if stripped and not stripped.startswith('-') and current_indent <= base_indent:
+                end_index = i
+                break
+    
+    if start_index is None:
+        print(f"Секция '{key}' не найдена")
+        return False
+    
+    # Удаляем старые элементы списка
+    if end_index is None:
+        end_index = len(lines)
+    
+    new_line = ' ' * (base_indent + 2) + f'- "{value}"\n'
+    lines[start_index:end_index] = [new_line]
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    print(f"Установлено: {value}")
+    return True
 
 def check_pishrink():
     if not os.path.exists(PISHRINK_PATH):
@@ -210,143 +375,82 @@ def set_list_key(config, key, value):
     """Установить список в конфиг"""
     config['/**']['ros__parameters'][key] = value
 
+# ==================== WORDS ====================
+
 def words_wake_phrase_add(args):
     """Добавить активационное слово"""
-    word = args.WORD.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        phrases = get_list_key(config, 'wake_phrases')
-        if word not in phrases:
-            phrases.append(word)
-            set_list_key(config, 'wake_phrases', phrases)
-            save_yaml(KWS_CONFIG, config)
-            print(f"Добавлено: {word}")
-        else:
-            print(f"Уже существует: {word}")
+    word = args.WORD.strip()
+    if add_to_yaml_list(KWS_CONFIG, 'wake_phrases', word):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_wake_phrase_remove(args):
     """Удалить активационное слово"""
-    word = args.WORD.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        phrases = get_list_key(config, 'wake_phrases')
-        if word in phrases:
-            phrases.remove(word)
-            set_list_key(config, 'wake_phrases', phrases)
-            save_yaml(KWS_CONFIG, config)
-            print(f"Удалено: {word}")
-        else:
-            print(f"Не найдено: {word}")
+    word = args.WORD.strip()
+    if remove_from_yaml_list(KWS_CONFIG, 'wake_phrases', word):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_wake_phrase_list(args):
     """Список активационных слов"""
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        phrases = get_list_key(config, 'wake_phrases')
-        print(f"Активационные слова ({len(phrases)}):")
-        for p in phrases:
-            print(f"  - {p}")
+    phrases = get_yaml_list(KWS_CONFIG, 'wake_phrases')
+    print(f"Активационные слова ({len(phrases)}):")
+    for p in phrases:
+        print(f"  - {p}")
 
 def words_wake_phrase_set(args):
     """Установить одно активационное слово"""
-    word = args.WORD.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        set_list_key(config, 'wake_phrases', [word])
-        save_yaml(KWS_CONFIG, config)
-        print(f"Установлено: {word}")
+    word = args.WORD.strip()
+    if set_yaml_list(KWS_CONFIG, 'wake_phrases', word):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_fast_command_add(args):
     """Добавить быструю команду"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        commands = get_list_key(config, 'fast_commands')
-        if cmd not in commands:
-            commands.append(cmd)
-            set_list_key(config, 'fast_commands', commands)
-            save_yaml(KWS_CONFIG, config)
-            print(f"Добавлено: {cmd}")
-        else:
-            print(f"Уже существует: {cmd}")
+    cmd = args.COMMAND.strip()
+    if add_to_yaml_list(KWS_CONFIG, 'fast_commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_fast_command_remove(args):
     """Удалить быструю команду"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        commands = get_list_key(config, 'fast_commands')
-        if cmd in commands:
-            commands.remove(cmd)
-            set_list_key(config, 'fast_commands', commands)
-            save_yaml(KWS_CONFIG, config)
-            print(f"Удалено: {cmd}")
-        else:
-            print(f"Не найдено: {cmd}")
+    cmd = args.COMMAND.strip()
+    if remove_from_yaml_list(KWS_CONFIG, 'fast_commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_fast_command_list(args):
     """Список быстрых команд"""
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        commands = get_list_key(config, 'fast_commands')
-        print(f"Быстрые команды ({len(commands)}):")
-        for c in commands:
-            print(f"  - {c}")
+    commands = get_yaml_list(KWS_CONFIG, 'fast_commands')
+    print(f"Быстрые команды ({len(commands)}):")
+    for c in commands:
+        print(f"  - {c}")
 
 def words_fast_command_set(args):
     """Установить одну быструю команду"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(KWS_CONFIG)
-    if config:
-        set_list_key(config, 'fast_commands', [cmd])
-        save_yaml(KWS_CONFIG, config)
-        print(f"Установлено: {cmd}")
+    cmd = args.COMMAND.strip()
+    if set_yaml_list(KWS_CONFIG, 'fast_commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_command_add(args):
     """Добавить команду ASR"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(ASR_CONFIG)
-    if config:
-        commands = get_list_key(config, 'commands')
-        if cmd not in commands:
-            commands.append(cmd)
-            set_list_key(config, 'commands', commands)
-            save_yaml(ASR_CONFIG, config)
-            print(f"Добавлено: {cmd}")
-        else:
-            print(f"Уже существует: {cmd}")
+    cmd = args.COMMAND.strip()
+    if add_to_yaml_list(ASR_CONFIG, 'commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_command_remove(args):
     """Удалить команду ASR"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(ASR_CONFIG)
-    if config:
-        commands = get_list_key(config, 'commands')
-        if cmd in commands:
-            commands.remove(cmd)
-            set_list_key(config, 'commands', commands)
-            save_yaml(ASR_CONFIG, config)
-            print(f"Удалено: {cmd}")
-        else:
-            print(f"Не найдено: {cmd}")
+    cmd = args.COMMAND.strip()
+    if remove_from_yaml_list(ASR_CONFIG, 'commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 def words_command_list(args):
     """Список команд ASR"""
-    config = load_yaml(ASR_CONFIG)
-    if config:
-        commands = get_list_key(config, 'commands')
-        print(f"Команды ASR ({len(commands)}):")
-        for c in commands:
-            print(f"  - {c}")
+    commands = get_yaml_list(ASR_CONFIG, 'commands')
+    print(f"Команды ASR ({len(commands)}):")
+    for c in commands:
+        print(f"  - {c}")
 
 def words_command_set(args):
     """Установить одну команду ASR"""
-    cmd = args.COMMAND.strip().lower()
-    config = load_yaml(ASR_CONFIG)
-    if config:
-        set_list_key(config, 'commands', [cmd])
-        save_yaml(ASR_CONFIG, config)
-        print(f"Установлено: {cmd}")
+    cmd = args.COMMAND.strip()
+    if set_yaml_list(ASR_CONFIG, 'commands', cmd):
+        print("Перезапустите контроллер: robohead core restart")
 
 # ==================== ACTION ====================
 

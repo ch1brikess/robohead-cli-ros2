@@ -613,17 +613,15 @@ def main():
   robohead core restart --debug
   robohead core get_img --pack
   robohead config speakers set_volume 75
-  robohead config words wake_phrase add слушай робот
-  robohead config words wake_phrase list
+  robohead config words wake_phrase add "слушай робот"
   robohead config words fast_command add громче
-  robohead config words fast_command remove тише
-  robohead config words command add покажи уши
   robohead config words command list
   robohead action create smile улыбнись
   robohead action run std_smile
   robohead action list
 
-Документация: https://docs.voltbro.ru
+Документация: https://docs.voltbro.ru/robohead-manual/
+Страница CLI на GitHub: https://github.com/ch1brikess/robohead-cli-ros2
         '''
     )
     subparsers = parser.add_subparsers(dest='module', metavar='МОДУЛЬ', help='Доступные модули')

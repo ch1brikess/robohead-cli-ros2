@@ -291,25 +291,63 @@ def action_info(args):
         print(f"Размер: {os.path.getsize(action_file)} байт")
 
 def action_run(args):
-    action_name = args.ACTION.strip()
-    config = load_yaml(YAML_CONFIG)
+    """Запуск действия через ROS 2 topic с активацией"""
+    check_ros()
     
-    if not config:
+    action_name = args.ACTION.strip()
+    
+    # Загружаем конфиги
+    yaml_config = load_yaml(YAML_CONFIG)
+    kws_config = load_yaml(KWS_CONFIG)
+    
+    if not yaml_config or not kws_config:
         return
     
-    match = config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
+    # Ищем маппинг действий
+    match = yaml_config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
     
+    # Ищем слово по имени действия
     found_word = None
     for word, path in match.items():
         if action_name in path:
             found_word = word
             break
     
-    if found_word:
-        print(f"Отправка: {found_word}")
-        run_cmd(f'ros2 topic pub {ASR_TOPIC} std_msgs/msg/String " \'{found_word}\'"')
-    else:
+    if not found_word:
         print(f"Действие не найдено: {action_name}")
+        print("\nДоступные действия:")
+        for word, path in match.items():
+            action_short = path.split('/')[0]
+            print(f"  - {action_short} (команда: '{word}')")
+        return
+    
+    # Получаем первую активационную фразу из KWS
+    wake_phrases = kws_config.get('/**', {}).get('ros__parameters', {}).get('wake_phrases', [])
+    if not wake_phrases:
+        print("Ошибка: Нет активационных слов в KWS конфиге")
+        return
+    
+    first_wake_phrase = wake_phrases[0]
+    
+    # Публикуем команды
+    print(f"Действие: {action_name}")
+    print(f"Команда: '{found_word}'")
+    print(f"Активация: '{first_wake_phrase}'")
+    print("\nОтправка команд...")
+    
+    # Шаг 1: Публикуем активационную фразу (KWS)
+    print(f"[1/2] Активация: {first_wake_phrase}")
+    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/kws/wake_phrases std_msgs/msg/String " \'{first_wake_phrase}\'" --once')
+    
+    # Небольшая задержка для таймаута
+    import time
+    time.sleep(0.5)
+    
+    # Шаг 2: Публикуем команду действия (ASR)
+    print(f"[2/2] Команда: {found_word}")
+    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/asr/commands std_msgs/msg/String " \'{found_word}\'" --once')
+    
+    print("\nГотово! Действие должно выполниться")
 
 # ==================== MAIN ====================
 

@@ -479,43 +479,6 @@ def list_actions(args):
     for name in sorted(actions):
         print(f"  - {name}")
 
-def create_action(args):
-    name = args.NAME.strip().lower()
-    word = args.WORD.strip().lower() if args.WORD and not args.no_word else None
-    
-    action_dir = ACTIONS_DIR / name
-    if action_dir.exists():
-        print(f"Уже существует: {action_dir}")
-        return
-    
-    action_dir.mkdir(parents=True)
-    (action_dir / '__init__.py').write_text("")
-    
-    code = "#!/usr/bin/env python3\n\nclass Action:\n    def run(self, **kwargs):\n        print(\"Действие {} выполнено\")\n        return True\n".format(name)
-    # Экранируем кавычки в коде, если имя содержит спецсимволы, но для простоты оставим так
-    code = f"""#!/usr/bin/env python3
-
-class Action:
-    def run(self, **kwargs):
-        print("Действие {name} выполнено")
-        return True
-"""
-    (action_dir / 'action.py').write_text(code)
-    print(f"Создано: {action_dir / 'action.py'}")
-    
-    if word:
-        # 1. Добавляем команду в ASR через текстовую функцию (сохраняет формат)
-        if add_to_yaml_list(ASR_CONFIG, 'commands', word):
-            print(f"Команда '{word}' добавлена в ASR")
-        
-        # 2. Добавляем маппинг в actions_match через текстовую функцию
-        # Нам нужно найти конец блока actions_match и вставить туда новую строку
-        if add_mapping_to_yaml(YAML_CONFIG, word, f"{name}/action.py"):
-            print(f"Маппинг '{word}' -> '{name}/action.py' добавлен")
-    
-    print("\nПерезапустите контроллер:")
-    print("  robohead core restart")
-
 # Новая вспомогательная функция для добавления маппинга
 def add_mapping_to_yaml(filepath, key, value):
     """

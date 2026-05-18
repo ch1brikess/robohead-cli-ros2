@@ -138,53 +138,6 @@ def add_to_yaml_list(filepath, key, value):
     print(f"Добавлено: {value}")
     return True
 
-def remove_from_yaml_list(filepath, key, value):
-    """Удалить элемент из списка YAML, сохраняя форматирование"""
-    if not filepath.exists():
-        print(f"Файл не найден: {filepath}")
-        return False
-    
-    backup(filepath)
-    
-    with open(filepath, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-    
-    in_section = False
-    removed = False
-    
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        
-        # Нашли ключ списка
-        if f'{key}:' in stripped and not in_section:
-            in_section = True
-            continue
-        
-        # Если в секции, ищем элемент для удаления
-        if in_section:
-            current_indent = len(line) - len(line.lstrip())
-            
-            # Конец списка
-            if stripped and not stripped.startswith('-') and current_indent == 0:
-                break
-            
-            # Проверяем элемент списка
-            if stripped.startswith('-'):
-                # Удаляем кавычки и пробелы для сравнения
-                item = stripped[1:].strip().strip('"').strip("'")
-                if item.lower() == value.lower():
-                    lines.pop(i)
-                    removed = True
-                    print(f"Удалено: {value}")
-                    break
-    
-    if not removed:
-        print(f"Не найдено: {value}")
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-    
-    return removed
 
 def get_yaml_list(filepath, key):
     """Получить список из YAML файла"""
@@ -609,17 +562,160 @@ class Action:
     print("\nПерезапустите контроллер:")
     print("  robohead core restart")
 
+def remove_mapping_from_yaml(filepath, key_to_remove):
+    """
+    Удалить пару ключ-значение из блока actions_match (формат YAML с > и { }),
+    сохраняя структуру и запятые у соседей.
+    """
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
+    backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    in_actions_match = False
+    brace_count = 0
+    target_index = None
+    prev_entry_index = None # Индекс записи перед удаляемой (чтобы поправить запятую)
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Ищем начало блока
+        if 'actions_match:' in stripped:
+            in_actions_match = True
+            continue
+        
+        if in_actions_match:
+            # Считаем скобки
+            brace_count += line.count('{') - line.count('}')
+            
+            if brace_count > 0:
+                # Ищем строку с удаляемым ключом
+                # Формат: "ключ": "путь" или "ключ" : "путь"
+                if f'"{key_to_remove}"' in stripped and ':' in stripped:
+                    target_index = i
+                    # Запоминаем предыдущую запись, если нужно будет добавить запятую туда
+                    # (если удаляемая была последней, то предыдущей нужно добавить запятую)
+                    # Но проще проверить следующую запись после удаления.
+                    break
+                
+                # Обновляем индекс последней виденной записи (на случай если надо будет править запятые)
+                if ':' in stripped and stripped.startswith('"'):
+                    prev_entry_index = i
+            
+            if brace_count == 0 and target_index is None:
+                # Вышли из блока и не нашли
+                break
+
+    if target_index is None:
+        print(f"Маппинг для '{key_to_remove}' не найден в {filepath.name}")
+        return False
+    
+    # Удаляем строку
+    lines.pop(target_index)
+    
+    # ТЕПЕРЬ ВАЖНЫЙ МОМЕНТ С ЗАПЯТЫМИ
+    # В YAML списке/словаре через запятую, если мы удалили элемент, 
+    # у ПРЕДЫДУЩЕГО элемента (который теперь стал последним перед закрывающей скобкой или следующим элементом) 
+    # должна быть запятая, ЕСЛИ после него есть еще элементы.
+    # А у элемента, который стал ПОСЛЕДНИМ перед закрывающей скобкой }, запятой быть НЕ ДОЛЖНО.
+    
+    # Найдем ближайшую непустую строку после удаленной (в пределах блока)
+    # И ближайшую непустую строку до удаленной.
+    
+    # 1. Проверяем строку, которая теперь стоит на месте удаленной (или следующую непустую)
+    # Если это закрывающая скобка }, то у ПРЕДЫДУЩЕЙ строки не должно быть запятой.
+    
+    # Пройдемся немного вперед, чтобы найти следующий значимый символ
+    next_significant_idx = None
+    for k in range(target_index, min(target_index + 5, len(lines))):
+        s = lines[k].strip()
+        if s and not s.startswith('#'):
+            next_significant_idx = k
+            break
+    
+    if next_significant_idx is not None:
+        next_line_content = lines[next_significant_idx].strip()
+        if next_line_content == '}':
+            # Следующий символ - закрывающая скобка. 
+            # Значит, элемент ПЕРЕД ней (который теперь последний в списке) не должен иметь запятой.
+            # Смотрим на строку перед next_significant_idx (это может быть наша новая последняя запись)
+            last_entry_idx = next_significant_idx - 1
+            while last_entry_idx >= 0:
+                prev_l = lines[last_entry_idx].strip()
+                if prev_l and not prev_l.startswith('#'):
+                    # Убираем запятую в конце, если она есть
+                    if prev_l.endswith(','):
+                        lines[last_entry_idx] = lines[last_entry_idx].replace(',', '', 1).rstrip() + '\n'
+                    break
+                last_entry_idx -= 1
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    return True
+
 def remove_action(args):
     name = args.PACKAGE.strip().lower()
     action_dir = ACTIONS_DIR / name
     
     if not action_dir.exists():
-        print("Не найдено")
+        print(f"Действие не найдено: {name}")
         return
     
-    if input(f"Удалить {name}? (y/n): ").lower() == 'y':
-        shutil.rmtree(action_dir)
-        print("Удалено")
+    if input(f"Удалить действие '{name}'? (y/n): ").lower() != 'y':
+        print("Отменено")
+        return
+    
+    # 1. Сначала попробуем найти команду (слово), связанную с этим действием, чтобы удалить её из конфигов
+    # Читаем YAML конфиг маппинга текстом, чтобы найти пару
+    found_word = None
+    if YAML_CONFIG.exists():
+        with open(YAML_CONFIG, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Ищем паттерн "слово": "name/action.py"
+            import re
+            # Экранируем имя папки для regex
+            safe_name = re.escape(name)
+            pattern = rf'"([^"]+)"\s*:\s*"{safe_name}/action\.py"'
+            match = re.search(pattern, content)
+            if match:
+                found_word = match.group(1)
+    
+    # 2. Удаляем папку действия
+    shutil.rmtree(action_dir)
+    print(f"Папка удалена: {action_dir}")
+    
+    changes_made = False
+    
+    # 3. Удаляем команду из списка ASR (если нашли слово)
+    if found_word:
+        print(f"Найдена связанная команда: '{found_word}'")
+        if remove_from_yaml_list(ASR_CONFIG, 'commands', found_word):
+            print(f"Команда '{found_word}' удалена из {ASR_CONFIG.name}")
+            changes_made = True
+        else:
+            print(f"Команда '{found_word}' не найдена в {ASR_CONFIG.name} (или уже удалена)")
+        
+        # 4. Удаляем маппинг из actions_match
+        if remove_mapping_from_yaml(YAML_CONFIG, found_word):
+            print(f"Маппинг '{found_word}' удален из {YAML_CONFIG.name}")
+            changes_made = True
+        else:
+            print(f"Маппинг '{found_word}' не найден в {YAML_CONFIG.name}")
+    else:
+        print("Не удалось найти связанную команду в маппинге. Возможно, она была названа иначе.")
+        print("Проверьте конфиги вручную, если нужно удалить остатки.")
+    
+    if changes_made:
+        print("\nКонфигурация обновлена. Перезапустите контроллер:")
+        print("  robohead core restart")
+    else:
+        print("\nДействие удалено, но изменения в конфигах не внесены (возможно, они уже были чистыми).")
 
 def action_info(args):
     name = args.PACKAGE.strip().lower()

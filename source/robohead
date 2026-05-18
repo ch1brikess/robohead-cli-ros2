@@ -618,7 +618,7 @@ def remove_from_yaml_list(filepath, key, value):
 def remove_mapping_from_yaml(filepath, key_to_remove):
     """
     Удалить пару ключ-значение из блока actions_match (формат YAML с > и { }),
-    сохраняя структуру и запятые у соседей.
+    исправляя запятые у соседей.
     """
     if not filepath.exists():
         print(f"Файл не найден: {filepath}")
@@ -632,81 +632,64 @@ def remove_mapping_from_yaml(filepath, key_to_remove):
     in_actions_match = False
     brace_count = 0
     target_index = None
-    prev_entry_index = None # Индекс записи перед удаляемой (чтобы поправить запятую)
     
+    # 1. Поиск строки для удаления
     for i, line in enumerate(lines):
         stripped = line.strip()
         
-        # Ищем начало блока
         if 'actions_match:' in stripped:
             in_actions_match = True
             continue
         
         if in_actions_match:
-            # Считаем скобки
             brace_count += line.count('{') - line.count('}')
             
             if brace_count > 0:
-                # Ищем строку с удаляемым ключом
-                # Формат: "ключ": "путь" или "ключ" : "путь"
+                # Ищем строку с ключом
                 if f'"{key_to_remove}"' in stripped and ':' in stripped:
                     target_index = i
-                    # Запоминаем предыдущую запись, если нужно будет добавить запятую туда
-                    # (если удаляемая была последней, то предыдущей нужно добавить запятую)
-                    # Но проще проверить следующую запись после удаления.
                     break
-                
-                # Обновляем индекс последней виденной записи (на случай если надо будет править запятые)
-                if ':' in stripped and stripped.startswith('"'):
-                    prev_entry_index = i
             
             if brace_count == 0 and target_index is None:
-                # Вышли из блока и не нашли
                 break
 
     if target_index is None:
-        print(f"Маппинг для '{key_to_remove}' не найден в {filepath.name}")
+        print(f"Маппинг '{key_to_remove}' не найден")
         return False
     
-    # Удаляем строку
+    # 2. Удаляем строку
     lines.pop(target_index)
     
-    # ТЕПЕРЬ ВАЖНЫЙ МОМЕНТ С ЗАПЯТЫМИ
-    # В YAML списке/словаре через запятую, если мы удалили элемент, 
-    # у ПРЕДЫДУЩЕГО элемента (который теперь стал последним перед закрывающей скобкой или следующим элементом) 
-    # должна быть запятая, ЕСЛИ после него есть еще элементы.
-    # А у элемента, который стал ПОСЛЕДНИМ перед закрывающей скобкой }, запятой быть НЕ ДОЛЖНО.
+    # 3. ИСПРАВЛЕНИЕ ЗАПЯТЫХ
+    # Теперь нужно пройти по блоку снова и убедиться, что у ПОСЛЕДНЕГО элемента перед '}' нет запятой,
+    # а у всех остальных ЕСТЬ.
     
-    # Найдем ближайшую непустую строку после удаленной (в пределах блока)
-    # И ближайшую непустую строку до удаленной.
+    in_actions_match = False
+    brace_count = 0
+    last_entry_idx = None
     
-    # 1. Проверяем строку, которая теперь стоит на месте удаленной (или следующую непустую)
-    # Если это закрывающая скобка }, то у ПРЕДЫДУЩЕЙ строки не должно быть запятой.
-    
-    # Пройдемся немного вперед, чтобы найти следующий значимый символ
-    next_significant_idx = None
-    for k in range(target_index, min(target_index + 5, len(lines))):
-        s = lines[k].strip()
-        if s and not s.startswith('#'):
-            next_significant_idx = k
-            break
-    
-    if next_significant_idx is not None:
-        next_line_content = lines[next_significant_idx].strip()
-        if next_line_content == '}':
-            # Следующий символ - закрывающая скобка. 
-            # Значит, элемент ПЕРЕД ней (который теперь последний в списке) не должен иметь запятой.
-            # Смотрим на строку перед next_significant_idx (это может быть наша новая последняя запись)
-            last_entry_idx = next_significant_idx - 1
-            while last_entry_idx >= 0:
-                prev_l = lines[last_entry_idx].strip()
-                if prev_l and not prev_l.startswith('#'):
-                    # Убираем запятую в конце, если она есть
-                    if prev_l.endswith(','):
-                        lines[last_entry_idx] = lines[last_entry_idx].replace(',', '', 1).rstrip() + '\n'
-                    break
-                last_entry_idx -= 1
-
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        if 'actions_match:' in stripped:
+            in_actions_match = True
+            continue
+            
+        if in_actions_match:
+            brace_count += line.count('{') - line.count('}')
+            
+            if brace_count > 0:
+                if ':' in stripped and stripped.startswith('"'):
+                    last_entry_idx = i
+            elif brace_count == 0 and last_entry_idx is not None:
+                # Мы вышли из скобок, значит last_entry_idx указывает на последний элемент
+                # Проверяем, есть ли там запятая
+                prev_line = lines[last_entry_idx].rstrip()
+                if prev_line.endswith(','):
+                    # Убираем запятую
+                    lines[last_entry_idx] = prev_line.replace(',', '', 1) + '\n'
+                break
+                
     with open(filepath, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     
@@ -724,51 +707,45 @@ def remove_action(args):
         print("Отменено")
         return
     
-    # 1. Сначала попробуем найти команду (слово), связанную с этим действием, чтобы удалить её из конфигов
-    # Читаем YAML конфиг маппинга текстом, чтобы найти пару
+    # 1. Находим связанную команду (слово) через regex в текстовом содержимом
     found_word = None
     if YAML_CONFIG.exists():
         with open(YAML_CONFIG, 'r', encoding='utf-8') as f:
             content = f.read()
-            # Ищем паттерн "слово": "name/action.py"
-            import re
-            # Экранируем имя папки для regex
-            safe_name = re.escape(name)
-            pattern = rf'"([^"]+)"\s*:\s*"{safe_name}/action\.py"'
-            match = re.search(pattern, content)
-            if match:
-                found_word = match.group(1)
+        import re
+        safe_name = re.escape(name)
+        pattern = rf'"([^"]+)"\s*:\s*"[^"]*{safe_name}/action\.py"'
+        match = re.search(pattern, content)
+        if match:
+            found_word = match.group(1)
     
-    # 2. Удаляем папку действия
+    # 2. Удаляем папку
     shutil.rmtree(action_dir)
     print(f"Папка удалена: {action_dir}")
     
     changes_made = False
     
-    # 3. Удаляем команду из списка ASR (если нашли слово)
+    # 3. Удаляем из конфигов, если нашли слово
     if found_word:
         print(f"Найдена связанная команда: '{found_word}'")
+        
+        # Удаляем из списка команд ASR
         if remove_from_yaml_list(ASR_CONFIG, 'commands', found_word):
             print(f"Команда '{found_word}' удалена из {ASR_CONFIG.name}")
             changes_made = True
-        else:
-            print(f"Команда '{found_word}' не найдена в {ASR_CONFIG.name} (или уже удалена)")
-        
-        # 4. Удаляем маппинг из actions_match
+            
+        # Удаляем из маппинга (с исправлением запятых)
         if remove_mapping_from_yaml(YAML_CONFIG, found_word):
             print(f"Маппинг '{found_word}' удален из {YAML_CONFIG.name}")
             changes_made = True
         else:
-            print(f"Маппинг '{found_word}' не найден в {YAML_CONFIG.name}")
+            print(f"Маппинг '{found_word}' не найден или ошибка удаления")
     else:
-        print("Не удалось найти связанную команду в маппинге. Возможно, она была названа иначе.")
-        print("Проверьте конфиги вручную, если нужно удалить остатки.")
+        print("Не удалось найти связанную команду в маппинге. Конфиги не затронуты.")
     
     if changes_made:
         print("\nКонфигурация обновлена. Перезапустите контроллер:")
         print("  robohead core restart")
-    else:
-        print("\nДействие удалено, но изменения в конфигах не внесены (возможно, они уже были чистыми).")
 
 def action_info(args):
     name = args.PACKAGE.strip().lower()
@@ -796,29 +773,35 @@ def action_run(args):
     
     action_name = args.ACTION.strip()
     
-    # Загружаем конфиги
-    yaml_config = load_yaml(YAML_CONFIG)
+    # Читаем KWS конфиг (списки там обычные, yaml.load работает нормально)
     kws_config = load_yaml(KWS_CONFIG)
-    
-    if not yaml_config or not kws_config:
+    if not kws_config:
         return
     
-    # Ищем маппинг действий
-    match = yaml_config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
+    # Читаем YAML конфиг маппинга КАК ТЕКСТ, чтобы не сломать парсер на блоке '>'
+    if not YAML_CONFIG.exists():
+        print(f"Файл не найден: {YAML_CONFIG}")
+        return
+        
+    with open(YAML_CONFIG, 'r', encoding='utf-8') as f:
+        content = f.read()
     
-    # Ищем слово по имени действия
+    # Ищем маппинг с помощью Regex: "слово": "путь/к/файлу.py"
+    # Экранируем имя действия для безопасного поиска
+    import re
+    safe_name = re.escape(action_name)
+    # Паттерн ищет: "ключ": ".../action_name/action.py"
+    pattern = rf'"([^"]+)"\s*:\s*"[^"]*{safe_name}/action\.py"'
+    
+    match = re.search(pattern, content)
+    
     found_word = None
-    for word, path in match.items():
-        if action_name in path:
-            found_word = word
-            break
+    if match:
+        found_word = match.group(1)
     
     if not found_word:
-        print(f"Действие не найдено: {action_name}")
-        print("\nДоступные действия:")
-        for word, path in match.items():
-            action_short = path.split('/')[0]
-            print(f"  - {action_short} (команда: '{word}')")
+        print(f"Действие '{action_name}' не найдено в маппинге")
+        print("Доступные действия можно посмотреть через: robohead action list")
         return
     
     # Получаем первую активационную фразу из KWS

@@ -479,11 +479,10 @@ def list_actions(args):
     for name in sorted(actions):
         print(f"  - {name}")
 
-# Новая вспомогательная функция для добавления маппинга
 def add_mapping_to_yaml(filepath, key, value):
     """
     Добавить пару ключ-значение в блок actions_match (формат YAML с > и { }),
-    сохраняя структуру и отступы.
+    сохраняя структуру, отступы и комментарии.
     """
     if not filepath.exists():
         print(f"Файл не найден: {filepath}")
@@ -498,58 +497,71 @@ def add_mapping_to_yaml(filepath, key, value):
     brace_count = 0
     insert_index = None
     last_entry_index = None
-    base_indent = 0
+    content_indent = 0 # Отступ содержимого внутри скобок
     
     for i, line in enumerate(lines):
         stripped = line.strip()
         
-        # 1. Ищем начало блока actions_match
+        # 1. Ищем начало блока actions_match (игнорируя комментарии перед ним)
         if 'actions_match:' in stripped:
             in_actions_match = True
+            # Базовый отступ ключа actions_match
             base_indent = len(line) - len(line.lstrip())
             continue
         
         if in_actions_match:
-            # Считаем скобки, чтобы найти внутренности словаря
-            brace_count += line.count('{') - line.count('}')
+            # Считаем скобки, чтобы отслеживать вложенность
+            open_braces = line.count('{')
+            close_braces = line.count('}')
             
-            # Если нашли открывающую скобку, запоминаем отступ содержимого
-            if '{' in line and brace_count == 1:
-                # Отступ элементов словаря обычно на 2 пробела больше, чем у скобки
-                # Но лучше определить его по первой найденной строке с ключом
-                pass
+            if open_braces > 0:
+                brace_count += open_braces
+                # Если это первая строка со скобкой, определим отступ содержимого
+                # Обычно это базовый отступ + 2 или больше
+                if brace_count == 1:
+                    # Найдем первую строку с данными внутри скобок в следующих итерациях
+                    pass
             
-            # Если мы внутри скобок { ... }
             if brace_count > 0:
-                # Ищем строки вида "ключ": "значение"
+                # Мы внутри словаря { ... }
+                
+                # Ищем строки вида "ключ" : "значение" (учитываем пробелы вокруг :)
+                # Регулярное выражение было бы точнее, но простого поиска хватит:
                 if ':' in stripped and stripped.startswith('"'):
                     last_entry_index = i
+                    # Запоминаем отступ этой строки, чтобы вставить новую с таким же
+                    content_indent = len(line) - len(line.lstrip())
                 
-                # Если встретили закрывающую скобку словаря
-                if '}' in stripped:
-                    brace_count -= 1
+                # Обновляем счетчик при закрытии скобок
+                if close_braces > 0:
+                    # Проверяем, закрывает ли эта скобка наш словарь
+                    # Нужно вычесть количество закрывающих скобок
+                    temp_count = brace_count
+                    brace_count -= close_braces
+                    
                     if brace_count == 0:
-                        # Мы нашли конец словаря! Вставлять надо перед этой строкой
+                        # Мы нашли закрывающую скобку основного словаря actions_match
                         insert_index = i
                         break
     
     if insert_index is None or last_entry_index is None:
         print("Не удалось найти корректный блок actions_match { }")
+        print(f"Debug: insert_index={insert_index}, last_entry_index={last_entry_index}")
         return False
     
-    # Проверяем, есть ли запятая в последней записи
-    last_line = lines[last_entry_index].rstrip()
-    if not last_line.endswith(','):
-        # Добавляем запятую к последней записи
-        lines[last_entry_index] = last_line + ",\n"
+    # Проверяем последнюю запись на наличие запятой
+    last_line_content = lines[last_entry_index].rstrip()
+    if not last_line_content.endswith(','):
+        lines[last_entry_index] = last_line_content + ",\n"
     
-    # Определяем отступ для новой строки (такой же, как у последней записи)
-    last_line_orig = lines[last_entry_index]
-    indent_size = len(last_line_orig) - len(last_line_orig.lstrip())
-    indent = ' ' * indent_size
+    # Формируем новую строку с тем же отступом, что и у последней записи
+    # Стиль: "ключ" : "значение", (с пробелами вокруг двоеточия, как в оригинале)
+    # Или без пробелов, если в оригинале их нет. Посмотрим на last_line_content.
+    # В оригинале: "std_startup" :       "std_startup/action.py",
+    # Давайте просто вставим компактно, YAML все равно поймет, или попробуем выровнять.
+    # Для надежности используем компактный формат, он всегда работает.
     
-    # Формируем новую строку: "ключ": "значение",
-    new_line = f'{indent}"{key}": "{value}",\n'
+    new_line = ' ' * content_indent + f'"{key}": "{value}",\n'
     
     # Вставляем перед закрывающей скобкой
     lines.insert(insert_index, new_line)
@@ -585,6 +597,8 @@ class Action:
         # 1. Добавляем команду в список ASR (текстовый метод)
         if add_to_yaml_list(ASR_CONFIG, 'commands', word):
             print(f"Команда '{word}' добавлена в ASR")
+        else:
+            print("Ошибка добавления команды в ASR!")
         
         # 2. Добавляем маппинг в actions_match (текстовый метод со скобками)
         if add_mapping_to_yaml(YAML_CONFIG, word, f"{name}/action.py"):

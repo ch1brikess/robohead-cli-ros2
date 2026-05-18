@@ -562,6 +562,59 @@ class Action:
     print("\nПерезапустите контроллер:")
     print("  robohead core restart")
 
+def remove_from_yaml_list(filepath, key, value):
+    """Удалить элемент из списка YAML, сохраняя форматирование"""
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
+    backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    in_section = False
+    removed = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Нашли ключ списка
+        if f'{key}:' in stripped and not in_section:
+            in_section = True
+            continue
+        
+        # Если в секции, ищем элемент для удаления
+        if in_section:
+            current_indent = len(line) - len(line.lstrip())
+            
+            # Конец списка (пустая строка или новый ключ с меньшим/равным отступом, но не элемент списка)
+            if stripped and not stripped.startswith('-') and current_indent <= 0: 
+                # Примечание: проверка current_indent <= 0 может быть слишком строгой для вложенных списков,
+                # но для корневых параметров ROS это обычно работает. 
+                # Более надежный вариант: если отступ меньше или равен отступу ключа списка.
+                # Для простоты оставим проверку на начало нового ключа или конец файла.
+                if ':' in stripped and not stripped.startswith('#'):
+                    break
+            
+            # Проверяем элемент списка
+            if stripped.startswith('-'):
+                # Удаляем кавычки и пробелы для сравнения
+                item = stripped[1:].strip().strip('"').strip("'")
+                if item.lower() == value.lower():
+                    lines.pop(i)
+                    removed = True
+                    print(f"Удалено: {value}")
+                    break
+    
+    if not removed:
+        print(f"Не найдено: {value}")
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    return removed
+
 def remove_mapping_from_yaml(filepath, key_to_remove):
     """
     Удалить пару ключ-значение из блока actions_match (формат YAML с > и { }),

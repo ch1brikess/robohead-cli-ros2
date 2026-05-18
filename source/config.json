@@ -1,9 +1,9 @@
 {
     "paths": {
-      "ws_root": "~/robohead_ws",
-      "controller_root": "~/robohead_ws/src/robohead2/robohead_controller",
-      "config_dir": "~/robohead_ws/src/robohead2/robohead_controller/config",
-      "actions_dir": "~/robohead_ws/src/robohead2/robohead_controller/robohead_controller/actions",
+      "ws_root": "~/ros2_ws",
+      "controller_root": "~/ros2_ws/src/robohead2/robohead_controller",
+      "config_dir": "~/ros2_ws/src/robohead2/robohead_controller/config",
+      "actions_dir": "~/ros2_ws/src/robohead2/robohead_controller/robohead_controller/actions",
       "image_dir": "~/OS_image",
       "user_config_dir": "~/.config/robohead"
     },

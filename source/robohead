@@ -339,12 +339,12 @@ def core_reboot(args):
 def set_volume(args):
     volume = 60.0 if args.default else float(args.VOLUME) if args.VOLUME else None
     
-    if volume is None:
+    if volume is None and volume != 0:
         print("Укажите громкость или --default")
         return
     
     print(f"Громкость: {volume}%")
-    run_cmd(f"ros2 service call {VOLUME_SERVICE} robohead_interfaces/srv/SetVolume '{{volume: {volume}}}'")
+    run_cmd(f"ros2 service call {VOLUME_SERVICE} robohead_interfaces/srv/SimpleCommand 'data: {volume}'")
     
     if args.standart:
         config = load_yaml(MEDIA_CONFIG)

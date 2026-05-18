@@ -820,7 +820,7 @@ def action_run(args):
     
     # Шаг 1: Публикуем активационную фразу (KWS)
     print(f"[1/2] Активация: {first_wake_phrase}")
-    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/kws/wake_phrases std_msgs/msg/String " \'{first_wake_phrase}\'" --once')
+    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/kws/wake_phrases std_msgs/msg/String "data: \'{first_wake_phrase}\'" --once')
     
     # Небольшая задержка для таймаута
     import time
@@ -828,7 +828,7 @@ def action_run(args):
     
     # Шаг 2: Публикуем команду действия (ASR)
     print(f"[2/2] Команда: {found_word}")
-    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/asr/commands std_msgs/msg/String " \'{found_word}\'" --once')
+    run_cmd(f'ros2 topic pub /robohead/speech_recognizer/asr/commands std_msgs/msg/String "data: \'{found_word}\'" --once')
     
     print("\nГотово! Действие должно выполниться")
 

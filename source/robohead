@@ -491,30 +491,114 @@ def create_action(args):
     action_dir.mkdir(parents=True)
     (action_dir / '__init__.py').write_text("")
     
-    code = f"#!/usr/bin/env python3\n\nclass Action:\n    def run(self, **kwargs):\n        print(\"Действие {name} выполнено\")\n        return True\n"
+    code = "#!/usr/bin/env python3\n\nclass Action:\n    def run(self, **kwargs):\n        print(\"Действие {} выполнено\")\n        return True\n".format(name)
+    # Экранируем кавычки в коде, если имя содержит спецсимволы, но для простоты оставим так
+    code = f"""#!/usr/bin/env python3
+
+class Action:
+    def run(self, **kwargs):
+        print("Действие {name} выполнено")
+        return True
+"""
     (action_dir / 'action.py').write_text(code)
     print(f"Создано: {action_dir / 'action.py'}")
     
     if word:
-        # Добавляем команду в ASR
-        config = load_yaml(ASR_CONFIG)
-        if config:
-            commands = get_list_key(config, 'commands')
-            if word not in commands:
-                commands.append(word)
-                set_list_key(config, 'commands', commands)
-                save_yaml(ASR_CONFIG, config)
+        # 1. Добавляем команду в ASR через текстовую функцию (сохраняет формат)
+        if add_to_yaml_list(ASR_CONFIG, 'commands', word):
+            print(f"Команда '{word}' добавлена в ASR")
         
-        # Добавляем маппинг
-        config = load_yaml(YAML_CONFIG)
-        if config:
-            match = config.get('/**', {}).get('ros__parameters', {}).get('actions_match', {})
-            match[word] = f"{name}/action.py"
-            config['/**']['ros__parameters']['actions_match'] = match
-            save_yaml(YAML_CONFIG, config)
+        # 2. Добавляем маппинг в actions_match через текстовую функцию
+        # Нам нужно найти конец блока actions_match и вставить туда новую строку
+        if add_mapping_to_yaml(YAML_CONFIG, word, f"{name}/action.py"):
+            print(f"Маппинг '{word}' -> '{name}/action.py' добавлен")
     
     print("\nПерезапустите контроллер:")
     print("  robohead core restart")
+
+# Новая вспомогательная функция для добавления маппинга
+def add_mapping_to_yaml(filepath, key, value):
+    """Добавить пару ключ-значение в блок actions_match, сохраняя формат"""
+    if not filepath.exists():
+        print(f"Файл не найден: {filepath}")
+        return False
+    
+    backup(filepath)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    in_section = False
+    insert_index = None
+    base_indent = 0
+    
+    # Ищем блок actions_match: >
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if 'actions_match:' in stripped:
+            in_section = True
+            base_indent = len(line) - len(line.lstrip())
+            # Ищем первую строку с содержимым после этого
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j]
+                next_stripped = next_line.strip()
+                if next_stripped and not next_stripped.startswith('#'):
+                    # Нашли первую реальную строку маппинга
+                    current_indent = len(next_line) - len(next_line.lstrip())
+                    insert_index = j # Вставим ПЕРЕД первой строкой? Нет, лучше в конец
+                    # Давайте найдем КОНЕЦ блока
+                    break
+                j += 1
+            
+            # Теперь ищем конец блока (следующий ключ с таким же или меньшим отступом)
+            k = i + 1
+            last_valid_index = None
+            while k < len(lines):
+                curr_line = lines[k]
+                curr_stripped = curr_line.strip()
+                
+                if not curr_stripped: # Пустая строка внутри блока возможна, но обычно конец блока - это новый ключ
+                    k += 1
+                    continue
+                
+                curr_indent = len(curr_line) - len(curr_line.lstrip())
+                
+                # Если встретили комментарий, пропускаем
+                if curr_stripped.startswith('#'):
+                    k += 1
+                    continue
+
+                # Если отступ меньше или равен базовому и это не часть словаря (нет двоеточия внутри или это новый ключ)
+                # В блоке actions_match строки выглядят как: "  "ключ": "значение","
+                # Новый ключ конфига будет например "ros:" с отступом base_indent
+                if curr_indent <= base_indent and ':' in curr_stripped and not curr_stripped.startswith('"'):
+                    insert_index = k
+                    break
+                
+                last_valid_index = k
+                k += 1
+            
+            if insert_index is None and last_valid_index:
+                insert_index = last_valid_index + 1
+            elif insert_index is None:
+                insert_index = i + 1 # Если ничего не нашли, вставляем сразу после заголовка
+            break
+    
+    if insert_index is None:
+        print("Блок actions_match не найден")
+        return False
+
+    # Формируем новую строку: "  "ключ": "значение",
+    # Отступ = base_indent + 2 (обычно)
+    new_line = ' ' * (base_indent + 2) + f'"{key}": "{value}",\n'
+    
+    lines.insert(insert_index, new_line)
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    return True
 
 def remove_action(args):
     name = args.PACKAGE.strip().lower()
